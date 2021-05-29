@@ -1,3 +1,7 @@
+## Goal
+
+Build a CI server based on the [Simple Haskell Handbook](https://marcosampellegrini.com/simple-haskell-book)
+
 ## Features
 
 - sandboxed builds in Docker containers
