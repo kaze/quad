@@ -7,6 +7,18 @@ import qualified Data.Time.Clock.POSIX as Time
 import qualified Network.HTTP.Simple as HTTP
 import qualified Socket
 import RIO
+import qualified RIO.Text as Text
+import qualified RIO.Text.Partial as Text.Partial
+
+instance Aeson.FromJSON Image where
+  parseJSON = Aeson.withText "parse-image" $ \image -> do
+    case Text.Partial.splitOn ":" image of
+      [name] ->
+        pure $ Image { name = name, tag = "latest" }
+      [name, tag] ->
+        pure $ Image { name = name, tag = tag }
+      _ ->
+        fail $ "Images has too many colons " <>  Text.unpack image
 
 type RequestBuilder = Text -> HTTP.Request
 
