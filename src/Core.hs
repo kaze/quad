@@ -4,6 +4,8 @@ import qualified Docker
 import RIO
 import qualified RIO.List as List
 import qualified RIO.Map as Map
+import qualified RIO.NonEmpty as NonEmpty
+import qualified RIO.Text as Text
 
 data Pipeline
   = Pipeline
@@ -57,12 +59,14 @@ data BuildState
 data BuildRunningState
   = BuildRunningState
     { step :: StepName
+    , container :: Docker.ContainerId
     }
   deriving (Eq, Show)
 
 data BuildResult
   = BuildSucceeded
   | BuildFailed
+  | BuildUnexpectedState Text
   deriving (Eq, Show)
 
 newtype StepName = StepName Text
@@ -79,23 +83,39 @@ progress docker build =
       case buildHasNextStep build of
         Left result ->
           pure $ build{state = BuildFinished result}
+
         Right step -> do
-          let options = Docker.CreateContainerOptions step.image
+          let script = Text.unlines $ ["set -ex"] <> NonEmpty.toList step.commands
+          let options = Docker.CreateContainerOptions
+                          {image = step.image
+                          , script = script
+                          }
           container <- docker.createContainer options
           docker.startContainer container
 
-          let s = BuildRunningState { step = step.name }
+          let s = BuildRunningState
+                    { step = step.name
+                    , container = container
+                    }
           pure $ build{state = BuildRunning s }
 
     BuildRunning state -> do
-      let exit = Docker.ContainerExitCode 0
-          result = exitCodeToStepResult exit
+      status <- docker.containerStatus state.container
 
-      pure build
-        { state = BuildReady
-        , completedSteps
-          = Map.insert state.step result build.completedSteps
-        }
+      case status of
+        Docker.ContainerRunning ->
+          pure build
+
+        Docker.ContainerExited exit -> do
+          let result = exitCodeToStepResult exit
+          pure build
+                { completedSteps = Map.insert state.step result build.completedSteps
+                , state = BuildReady
+                }
+
+        Docker.ContainerOther other -> do
+          let s = BuildUnexpectedState other
+          pure build {state = BuildFinished s}
 
     BuildFinished _ ->
       pure build

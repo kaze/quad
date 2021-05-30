@@ -7,6 +7,8 @@ import qualified Network.HTTP.Simple as HTTP
 import qualified Socket
 import RIO
 
+type RequestBuilder = Text -> HTTP.Request
+
 newtype ContainerExitCode = ContainerExitCode Int
   deriving (Eq, Show)
 
@@ -22,6 +24,7 @@ imageToText (Image image) = image
 data CreateContainerOptions
   = CreateContainerOptions
     { image :: Image
+    , script :: Text
     }
 
 newtype ContainerId = ContainerId Text
@@ -30,8 +33,33 @@ newtype ContainerId = ContainerId Text
 containerIdToText :: ContainerId -> Text
 containerIdToText (ContainerId c) = c
 
+data ContainerStatus
+  = ContainerRunning
+  | ContainerExited ContainerExitCode
+  | ContainerOther Text
+  deriving (Eq, Show)
+
 
 -- Docker Service functions
+
+containerStatus_ :: RequestBuilder -> ContainerId -> IO ContainerStatus
+containerStatus_ makeReq container = do
+  let parser = Aeson.withObject "container-inspect" $ \o -> do
+        state <- o .: "State"
+        status <- state .: "Status"
+
+        case status of
+          "running" -> pure ContainerRunning
+          "exited" -> do
+            code <- state .: "ExitCode"
+            pure $ ContainerExited (ContainerExitCode code)
+          other -> pure $ ContainerOther other
+
+  let req = makeReq $ "/containers/" <> containerIdToText container <> "/json"
+
+  res <- HTTP.httpBS req
+
+  parseResponse res parser
 
 parseResponse
   :: HTTP.Response ByteString
@@ -46,22 +74,19 @@ parseResponse res parser = do
     Left e -> throwString e
     Right status -> pure status
 
-createContainer_ :: CreateContainerOptions -> IO ContainerId
-createContainer_ options = do
-  manager <- Socket.newManager "/var/run/docker.sock"
-
+createContainer_ :: RequestBuilder -> CreateContainerOptions -> IO ContainerId
+createContainer_ makeReq options = do
   let image = imageToText options.image
   let body = Aeson.object
               [ ("Image", Aeson.toJSON image)
               , ("Tty", Aeson.toJSON True)
               , ("Labels", Aeson.object [("quad", "")])
-              , ("Cmd", "echo hello")
               , ("Entrypoint", Aeson.toJSON [Aeson.String "/bin/sh", "-c"])
+              , ("Cmd", "echo \"$QUAD_SCRIPT\" | /bin/sh")
+              , ("Env", Aeson.toJSON ["QUAD_SCRIPT=" <> options.script])
               ]
 
-  let req = HTTP.defaultRequest
-          & HTTP.setRequestManager manager
-          & HTTP.setRequestPath "/v1.40/containers/create"
+  let req = makeReq "/containers/create"
           & HTTP.setRequestMethod "POST"
           & HTTP.setRequestBodyJSON body
 
@@ -73,15 +98,11 @@ createContainer_ options = do
 
   parseResponse res parser
 
-startContainer_ :: ContainerId -> IO ()
-startContainer_ container = do
-  manager <- Socket.newManager "/var/run/docker.sock"
+startContainer_ :: RequestBuilder -> ContainerId -> IO ()
+startContainer_ makeReq container = do
+  let path = "/containers/" <> containerIdToText container <> "/start"
 
-  let path = "/v1.40/containers/" <> containerIdToText container <> "/start"
-
-  let req = HTTP.defaultRequest
-          & HTTP.setRequestManager manager
-          & HTTP.setRequestPath (encodeUtf8 path)
+  let req = makeReq path
           & HTTP.setRequestMethod "POST"
 
   void $ HTTP.httpBS req
@@ -91,13 +112,23 @@ startContainer_ container = do
 
 data Service
   = Service
-    { createContainer :: CreateContainerOptions -> IO ContainerId,
-      startContainer :: ContainerId -> IO ()
+    { createContainer :: CreateContainerOptions -> IO ContainerId
+    , startContainer :: ContainerId -> IO ()
+    , containerStatus :: ContainerId -> IO ContainerStatus
     }
 
 createService :: IO Service
 createService = do
+  manager <- Socket.newManager "/var/run/docker.sock"
+
+  let makeReq :: RequestBuilder
+      makeReq path =
+        HTTP.defaultRequest
+          & HTTP.setRequestManager manager
+          & HTTP.setRequestPath (encodeUtf8 $ "/v1.40" <> path)
+
   pure Service
-    { createContainer = createContainer_
-    , startContainer = startContainer_
+    { createContainer = createContainer_ makeReq
+    , startContainer = startContainer_ makeReq
+    , containerStatus = containerStatus_ makeReq
     }
