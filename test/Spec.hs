@@ -18,7 +18,7 @@ makeStep :: Text -> Text -> [Text] -> Step
 makeStep name image commands
   = Step
     { name = StepName name
-    , image = Docker.Image image
+    , image = Docker.Image { name = image, tag = "latest"}
     , commands = NonEmpty.Partial.fromList commands
     }
 
@@ -44,8 +44,8 @@ emptyHooks = Runner.Hooks
 
 cleanupDocker :: IO ()
 cleanupDocker = void do
-  Process.readProcessStdout "docker rm -f $(docker ps -aq --filter 'label=quad')"
-  Process.readProcessStdout "docker volume rm -f $(docker volume ls -q --filter 'label=quad')"
+  Process.readProcessStdout "docker rm -f $(docker ps -aq --filter 'label=quad') 2> /dev/null"
+  Process.readProcessStdout "docker volume rm -f $(docker volume ls -q --filter 'label=quad') 2> /dev/null"
 
 
 -- Test
@@ -80,6 +80,7 @@ testSharedWorkspace docker runner = do
             ]
 
   result <- runner.runBuild emptyHooks build
+
   result.state `shouldBe` BuildFinished BuildSucceeded
   Map.elems result.completedSteps `shouldBe` [StepSucceeded, StepSucceeded]
 
@@ -104,9 +105,23 @@ testLogCollection runner = do
             ]
 
   result <- runner.runBuild hooks build
+
   result.state `shouldBe` BuildFinished BuildSucceeded
   Map.elems result.completedSteps `shouldBe` [StepSucceeded, StepSucceeded]
   readMVar expected >>= \logs -> logs `shouldBe` Set.empty
+
+testImagePull :: Runner.Service -> IO ()
+testImagePull runner = do
+  Process.readProcessStdout "docker rmi -f busybox 2> /dev/null"
+
+  build <- runner.prepareBuild $ makePipeline
+            [ makeStep "First step" "busybox" ["date"]
+            ]
+
+  result <- runner.runBuild emptyHooks build
+
+  result.state `shouldBe` BuildFinished BuildSucceeded
+  Map.elems result.completedSteps `shouldBe` [StepSucceeded]
 
 
 -- Running the tests
@@ -125,3 +140,5 @@ main = hspec do
       testSharedWorkspace docker runner
     it "should collect logs" do
       testLogCollection runner
+    it "should pull images" do
+      testImagePull runner

@@ -16,11 +16,15 @@ newtype ContainerExitCode = ContainerExitCode Int
 exitCodeToInt :: ContainerExitCode -> Int
 exitCodeToInt (ContainerExitCode code) = code
 
-newtype Image = Image Text
+data Image
+  = Image
+  { name :: Text
+  , tag :: Text
+  }
   deriving (Eq, Show)
 
 imageToText :: Image -> Text
-imageToText (Image image) = image
+imageToText image = image.name <> ":" <> image.tag
 
 data CreateContainerOptions
   = CreateContainerOptions
@@ -157,6 +161,18 @@ fetchLogs_ makeReq options = do
   res <- HTTP.httpBS $ makeReq url
   pure $ HTTP.getResponseBody res
 
+pullImage_ :: RequestBuilder -> Image -> IO ()
+pullImage_ makeReq image = do
+  let url = "/images/create?tag="
+          <> image.tag
+          <> "&fromImage="
+          <> image.name
+
+  let req = makeReq url
+          & HTTP.setRequestMethod "POST"
+
+  void $ HTTP.httpBS req
+
 
 -- Docker Service
 
@@ -167,6 +183,7 @@ data Service
     , containerStatus :: ContainerId -> IO ContainerStatus
     , createVolume :: IO Volume
     , fetchLogs :: FetchLogOptions -> IO ByteString
+    , pullImage :: Image -> IO ()
     }
 
 createService :: IO Service
@@ -185,4 +202,5 @@ createService = do
     , containerStatus = containerStatus_ makeReq
     , createVolume = createVolume_ makeReq
     , fetchLogs = fetchLogs_ makeReq
+    , pullImage = pullImage_ makeReq
     }
