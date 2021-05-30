@@ -5,6 +5,8 @@ import qualified Docker
 import RIO
 import qualified RIO.Map as Map
 import qualified RIO.NonEmpty.Partial as NonEmpty.Partial
+import qualified Runner
+import qualified System.Process.Typed as Process
 import Test.Hspec
 
 
@@ -22,22 +24,6 @@ makePipeline :: [Step] -> Pipeline
 makePipeline steps =
   Pipeline { steps = NonEmpty.Partial.fromList steps }
 
-
--- Test values
-
-testPipeline :: Pipeline
-testPipeline = makePipeline
-  [ makeStep "First step" "ubuntu" ["date"]
-  , makeStep "Second step" "ubuntu" ["uname -r"]
-  ]
-
-testBuild :: Build
-testBuild = Build
-  { pipeline = testPipeline
-  , state = BuildReady
-  , completedSteps = mempty
-  }
-
 runBuild :: Docker.Service -> Build -> IO Build
 runBuild docker build = do
   newBuild <- Core.progress docker build
@@ -50,18 +36,28 @@ runBuild docker build = do
       runBuild docker newBuild
 
 
--- First test
+-- Test
 
-testRunSuccess :: Docker.Service -> IO ()
-testRunSuccess docker = do
-  result <- runBuild docker testBuild
+testRunSuccess :: Runner.Service -> IO ()
+testRunSuccess runner = do
+  build <- runner.prepareBuild $ makePipeline
+            [ makeStep "First step" "ubuntu" ["date"]
+            , makeStep "Second step" "ubuntu" ["uname -r"]
+            ]
+  result <- runner.runBuild build
+
   result.state `shouldBe` BuildFinished BuildSucceeded
   Map.elems result.completedSteps `shouldBe` [StepSucceeded, StepSucceeded]
 
 main :: IO ()
 main = hspec do
   docker <- runIO Docker.createService
+  runner <- runIO $ Runner.createService docker
 
-  describe "Quad CI" do
+  beforeAll cleanupDocker $ describe "Quad CI" do
     it "should run a build (success)" do
-      testRunSuccess docker
+      testRunSuccess runner
+
+cleanupDocker :: IO ()
+cleanupDocker = void do
+  Process.readProcessStdout "docker rm -f $(docker ps -aq --filter 'label=quad')"
