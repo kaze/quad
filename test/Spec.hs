@@ -1,5 +1,6 @@
 module Main where
 
+import qualified Docker
 import RIO
 import Core
 import qualified RIO.NonEmpty.Partial as NonEmpty.Partial
@@ -9,7 +10,7 @@ makeStep :: Text -> Text -> [Text] -> Step
 makeStep name image commands
   = Step
     { name = StepName name
-    , image = Image image
+    , image = Docker.Image image
     , commands = NonEmpty.Partial.fromList commands
     }
 
@@ -20,16 +21,16 @@ makePipeline steps =
 -- Test values
 testPipeline :: Pipeline
 testPipeline = makePipeline
-  [ makeStep "First step" "ubuntu" "date"
-  , makeStep "Second step" "ubuntu" "uname -r"
+  [ makeStep "First step" "ubuntu" ["date"]
+  , makeStep "Second step" "ubuntu" ["uname -r"]
   ]
 
 testBuild :: Build
 testBuild = Build
   { pipeline = testPipeline
   , state = BuildReady
-  , completedSteps = empty
+  , completedSteps = mempty
   }
 
 main :: IO ()
-main :: pure ()
+main = pure ()
