@@ -3,6 +3,7 @@ module Docker where
 import qualified Data.Aeson as Aeson
 import Data.Aeson ((.:))
 import qualified Data.Aeson.Types as Aeson.Types
+import qualified Data.Time.Clock.POSIX as Time
 import qualified Network.HTTP.Simple as HTTP
 import qualified Socket
 import RIO
@@ -46,6 +47,13 @@ newtype Volume
 
 volumeToText :: Volume -> Text
 volumeToText (Volume v) = v
+
+data FetchLogOptions
+  = FetchLogOptions
+      { container :: ContainerId
+      , since :: Time.POSIXTime
+      , until :: Time.POSIXTime
+      }
 
 
 -- Docker Service functions
@@ -136,6 +144,19 @@ startContainer_ makeReq container = do
 
   void $ HTTP.httpBS req
 
+fetchLogs_ :: RequestBuilder -> FetchLogOptions -> IO ByteString
+fetchLogs_ makeReq options = do
+  let timestampToText t = tshow(round t :: Int)
+  let url = "/containers/"
+            <> containerIdToText options.container
+            <> "/logs?stdout=true&stderr=true&since="
+            <> timestampToText options.since
+            <> "&until="
+            <> timestampToText options.until
+
+  res <- HTTP.httpBS $ makeReq url
+  pure $ HTTP.getResponseBody res
+
 
 -- Docker Service
 
@@ -145,6 +166,7 @@ data Service
     , startContainer :: ContainerId -> IO ()
     , containerStatus :: ContainerId -> IO ContainerStatus
     , createVolume :: IO Volume
+    , fetchLogs :: FetchLogOptions -> IO ByteString
     }
 
 createService :: IO Service
@@ -162,4 +184,5 @@ createService = do
     , startContainer = startContainer_ makeReq
     , containerStatus = containerStatus_ makeReq
     , createVolume = createVolume_ makeReq
+    , fetchLogs = fetchLogs_ makeReq
     }

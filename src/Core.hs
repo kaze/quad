@@ -1,5 +1,6 @@
 module Core where
 
+import qualified Data.Time.Clock.POSIX as Time
 import qualified Docker
 import RIO
 import qualified RIO.List as List
@@ -75,6 +76,76 @@ newtype StepName = StepName Text
 
 stepNameToText :: StepName -> Text
 stepNameToText (StepName step) = step
+
+data Log = Log
+  { output :: ByteString
+  , step :: StepName
+  }
+  deriving (Eq, Show)
+
+type LogCollection = Map StepName CollectionStatus
+
+data CollectionStatus
+  = CollectionReady
+  | CollectingLogs Docker.ContainerId Time.POSIXTime
+  | CollectionFinished
+  deriving (Eq, Show)
+
+initLogCollection :: Pipeline -> LogCollection
+initLogCollection pipeline =
+  Map.fromList $ NonEmpty.toList steps
+  where
+    steps = pipeline.steps <&> \step -> (step.name, CollectionReady)
+
+updateLogCollection :: BuildState -> Time.POSIXTime -> LogCollection -> LogCollection
+updateLogCollection state lastCollection collection =
+  Map.mapWithKey f collection
+  where
+    update step since nextState =
+      case state of
+        BuildRunning state ->
+          if state.step == step
+            then CollectingLogs state.container since
+            else nextState
+        _ -> nextState
+
+    f step = \case
+      CollectionReady ->
+        update step 0 CollectionReady
+
+      CollectingLogs _ _ ->
+        update step lastCollection CollectionFinished
+
+      CollectionFinished ->
+        CollectionFinished
+
+runLogCollection :: Docker.Service -> Time.POSIXTime -> LogCollection -> IO [Log]
+runLogCollection docker collectionUntil collection = do
+  logs <- Map.traverseWithKey f collection
+  pure $ concat (Map.elems logs)
+  where
+    f step = \case
+      CollectionReady -> pure []
+
+      CollectionFinished -> pure []
+
+      CollectingLogs container since -> do
+        let options = Docker.FetchLogOptions
+                        { container = container
+                        , since = since
+                        , until = collectionUntil
+                        }
+
+        output <- docker.fetchLogs options
+
+        pure [Log {step = step, output = output}]
+
+collectLogs :: Docker.Service -> LogCollection -> Build -> IO (LogCollection, [Log])
+collectLogs docker collection build = do
+  now <- Time.getPOSIXTime
+  logs <- runLogCollection docker now collection
+  let newCollection = updateLogCollection build.state now collection
+  pure (newCollection, logs)
 
 progress :: Docker.Service -> Build -> IO Build
 progress docker build =
