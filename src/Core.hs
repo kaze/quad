@@ -25,6 +25,7 @@ data Build
     { pipeline :: Pipeline
     , state :: BuildState
     , completedSteps :: Map StepName StepResult
+    , volume :: Docker.Volume
     }
 
 buildHasNextStep :: Build -> Either BuildResult Step
@@ -74,7 +75,6 @@ newtype StepName = StepName Text
 
 stepNameToText :: StepName -> Text
 stepNameToText (StepName step) = step
-
 
 progress :: Docker.Service -> Build -> IO Build
 progress docker build =
